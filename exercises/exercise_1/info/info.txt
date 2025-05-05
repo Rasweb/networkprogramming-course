@@ -1,0 +1,21 @@
+// A "captures" folder is required, may be created by docker
+
+// Compile/Build files
+g++ -o file_nickname file_name 
+
+// ex
+g++ -o server server.cpp
+
+// Run files
+./file_nickname
+
+// Add 3 terminals
+// - Terminal 1:
+Capture packets using command: 
+capture-packets port 8080
+
+// - Terminal 2:
+Run Server
+
+Terminal 3:
+Run client
