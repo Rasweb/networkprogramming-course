@@ -1,0 +1,12 @@
+// A "captures" folder is required, may be created by docker
+// Uses a linux devcontainer
+// In vscode press "Ctrl+Shift+P" and  type "Dev Containers: Reopenin Container" 
+
+// Compile/Build files
+g++ -o file_nickname file_name 
+
+// ex
+g++ -o server server.cpp
+
+// Run files
+./file_nickname
