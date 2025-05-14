@@ -4,23 +4,12 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <string>
 #define SERVER_PORT 8080
 #define REQUEST_BACKLOG 5
 #define IP_TO_LISTEN_TO "127.0.0.1"
-#define SOCKET_CREATE_MSG "Socket creation error"
-#define SOCKET_OPT_MSG "Socket options error"
-#define SOCKET_BIND_MSG "Socket bind error"
-#define SOCKET_LISTEN_MSG "Socket listen error"
-#define SOCKET_ACCEPT_MSG "Socket accept error"
-#define SOCKET_RECEIVE_MSG "Socket receive error"
 
-void errorCheck(int var, char *msg)
-{
-    if (var < 0)
-    {
-        std::cerr << msg << ": " << errno << std::endl;
-    }
-}
+void errorCheck(int var, std::string msg);
 
 int main()
 {
@@ -28,16 +17,22 @@ int main()
     int socketOptReturn;
     int socketBindReturn;
     int socketListenReturn;
+    std::string socketCreateMsg = "Socket creation error";
+    std::string socketOptMsg = "Socket options error";
+    std::string socketBindMsg = "Socket bind error";
+    std::string socketListenMsg = "Socket listen error";
+    std::string socketAcceptMsg = "Socket accept error";
+    std::string socketReciveMsg = "Socket receive error";
 
     struct sockaddr_in serverAdress;
 
     serverSocketFd = socket(AF_INET, SOCK_STREAM, 0);
-    errorCheck(serverSocketFd, SOCKET_CREATE_MSG);
+    errorCheck(serverSocketFd, socketCreateMsg);
 
     int opt = 1;
 
-    int socketOptReturn = setsockopt(serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    errorCheck(socketOptReturn, SOCKET_OPT_MSG);
+    socketOptReturn = setsockopt(serverSocketFd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    errorCheck(socketOptReturn, socketOptMsg);
 
     memset(&serverAdress, 0, sizeof(serverAdress));
     serverAdress.sin_family = AF_INET;
@@ -45,90 +40,71 @@ int main()
     serverAdress.sin_port = htons(SERVER_PORT);
 
     socketBindReturn = bind(serverSocketFd, (struct sockaddr *)&serverAdress, sizeof(serverAdress));
-    errorCheck(socketBindReturn, SOCKET_BIND_MSG);
+    errorCheck(socketBindReturn, socketBindMsg);
 
     socketListenReturn = listen(serverSocketFd, 5);
-    errorCheck(socketListenReturn, SOCKET_LISTEN_MSG);
+    errorCheck(socketListenReturn, socketListenMsg);
 
     while (1)
     {
-        int clientSocket = accept(serverSocketFd, NULL, NULL);
-        errorCheck(clientSocket, SOCKET_ACCEPT_MSG);
+        struct sockaddr_in client_addr;
+        socklen_t addrlen = sizeof(client_addr);
+        int clientSocket = accept(serverSocketFd, (struct sockaddr *)&client_addr, &addrlen);
+        errorCheck(clientSocket, socketAcceptMsg);
 
         char buffer[1024];
         int reciveBytes = recv(clientSocket, buffer, sizeof(buffer), 0);
-        errorCheck(reciveBytes, SOCKET_RECEIVE_MSG);
+        errorCheck(reciveBytes, socketReciveMsg);
 
         if (reciveBytes > 0)
         {
             buffer[reciveBytes] = '\0';
-            std::cout << "Received from client: " << buffer << std::endl;
+            std::cout << "Received: " << buffer << std::endl;
+
+            if (strcmp(buffer, "NORMAL_DATA:Hello") == 0)
+            {
+                std::string serverMsg = "SERVER_ACK:HELLO";
+                send(clientSocket, serverMsg.c_str(), serverMsg.length(), 0);
+                errorCheck(serverSocketFd, "Something went wrong with send");
+                std::cout << "Sent: " << serverMsg << std::endl;
+            }
+            else if (strcmp(buffer, "SEND_URGENT_REQUEST") == 0)
+            {
+                char oob_byte;
+                int socketUrgentRecv = recv(clientSocket, &oob_byte, 1, MSG_OOB);
+                std::cout << "Urgent data" << oob_byte << std::endl;
+                if (socketUrgentRecv > 0)
+                {
+                    std::string serverMsg = "SERVER_URGENT_ACK:" + std::string(1, oob_byte);
+                    send(clientSocket, serverMsg.c_str(), serverMsg.length(), 0);
+                    std::cout << "Sent: " << serverMsg << std::endl;
+                }
+                else
+                {
+                    std::string serverMsg = "SERVER_NO_URGENT_DATA";
+                    send(clientSocket, serverMsg.c_str(), serverMsg.length(), 0);
+                    std::cout << "Sent: " << serverMsg << std::endl;
+                }
+            }
+            else
+            {
+                std::string serverMsg = "SERVER_UNKNOWN_COMMAND";
+                send(clientSocket, serverMsg.c_str(), serverMsg.length(), 0);
+                std::cout << "Sent: " << serverMsg << std::endl;
+            }
         }
 
-        close(serverSocketFd);
+        close(clientSocket);
     }
-    // int serverFd;
-    // int socketOptions;
-    // struct sockaddr_in serverAddr;
-    // int socketBind;
-    // int socketListen;
-    // char instructorBuffer[1024];
-
-    // serverFd = socket(AF_INET, SOCK_STREAM, 0);
-    // if (serverFd < 0)
-    // {
-    //     std::cerr << "Socket creation error" << std::endl;
-    // }
-
-    // int optval = 1;
-    // socketOptions = setsockopt(serverFd, SOL_SOCKET, SO_REUSEADDR, &optval,
-    //                            sizeof(optval));
-    // if (socketOptions < 0)
-    // {
-    //     std::cerr << "Failed to set socket options" << std::endl;
-    // }
-
-    // memset(&serverAddr, 0, sizeof(serverAddr));
-    // serverAddr.sin_family = AF_INET;
-    // serverAddr.sin_addr.s_addr = INADDR_ANY;
-    // serverAddr.sin_port = htons(STUDENT_SERVER_PORT);
-
-    // socketBind = bind(serverFd, (struct sockaddr *)&serverAddr, sizeof(serverAddr));
-    // if (socketBind < 0)
-    // {
-    //     std::cerr << "Socket binding failed" << std::endl;
-    //     close(serverFd);
-    // }
-
-    // socketListen = listen(serverFd, REQUEST_BACKLOG);
-    // if (socketListen < 0)
-    // {
-    //     std::cerr << "Socket listen failed" << std::endl;
-    //     close(serverFd);
-    // }
-
-    // std::cout << "Student server listening on port " << STUDENT_SERVER_PORT << "..." << std::endl;
-
-    // while (1)
-    // {
-    //     struct sockaddr_in instructor_addr;
-    //     socklen_t instructor_addr_len = sizeof(instructor_addr);
-    //     int instructor_conn_fd = accept(serverFd, (struct sockaddr *)&instructor_addr, &instructor_addr_len);
-    //     if (instructor_conn_fd < 0)
-    //     {
-    //         std::cerr << "Accept failed" << std::endl;
-    //         close(instructor_conn_fd);
-    //     }
-
-    //     char instructor_ip_str[INET_ADDRSTRLEN];
-    //     inet_ntop(AF_INET, &instructor_addr.sin_addr, instructor_ip_str, INET_ADDRSTRLEN);
-    //     std::cout << "Connection accepted from instructor's server at " << instructor_ip_str << ":" << ntohs(instructor_addr.sin_port) << std::endl;
-    //     recv(instructor_conn_fd, &instructorBuffer, sizeof(instructorBuffer) - 1, 0);
-    //     close(instructor_conn_fd);
-    //     close(serverFd);
-
-    //     /* code */
-    // }
-
+    close(serverSocketFd);
     return 0;
+}
+
+void errorCheck(int var, std::string msg)
+{
+    if (var < 0)
+    {
+        std::cerr << msg << ": " << errno << std::endl;
+        close(var);
+    }
 }

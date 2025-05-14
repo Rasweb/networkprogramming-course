@@ -8,26 +8,22 @@
 #include <vector>
 #define SERVER_PORT 8080
 #define IP_TO_LISTEN_TO "127.0.0.1"
-#define DATA_TO_SEND "NORMAL_DATA:Hello"
-#define SOCKET_CONNECT_MSG "Socket connect msg"
-#define SOCKET_SEND_MSG "Socket send msg"
 
-void errorCheck(int var, char *msg)
-{
-    if (var < 0)
-    {
-        std::cerr << msg << ": " << errno << std::endl;
-    }
-}
+void errorCheck(int var, std::string msg);
+void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sendMsg, std::string connectMsg, bool sendUrgent);
 
 int main()
 {
     int clientSocket;
     int socketConnectReturn;
     int socketSendReturn;
+    std::string dataToSend = "NORMAL_DATA:Hello";
+    std::string socketConnectMsg = "Socket connect msg";
+    const char *socketSendMsg1 = "NORMAL_DATA:Hello";
+    const char *socketSendMsg2 = "SEND_URGENT_REQUEST";
 
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
-    std::string message_to_send = DATA_TO_SEND;
+    std::string message_to_send = dataToSend;
 
     sockaddr_in serverAddress;
     memset(&serverAddress, 0, sizeof(serverAddress));
@@ -42,55 +38,44 @@ int main()
     }
 
     socketConnectReturn = connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress));
-    errorCheck(socketConnectReturn, SOCKET_CONNECT_MSG);
+    errorCheck(socketConnectReturn, socketConnectMsg);
 
-    socketSendReturn = send(clientSocket, message_to_send.c_str(), message_to_send.length(), 0);
-    errorCheck(socketSendReturn, SOCKET_SEND_MSG);
-
-    std::cout << "Sent to registry server: " << message_to_send << std::endl;
+    sendAndReceiveFunc('1', socketSendReturn, clientSocket, socketSendMsg1, socketConnectMsg, false);
+    std::cout << std::endl;
+    sendAndReceiveFunc('2', socketSendReturn, clientSocket, socketSendMsg2, socketConnectMsg, true);
 
     close(clientSocket);
 
-    // int clientFd;
-    // struct sockaddr_in registryServerAddr;
-    // int registryServerInet;
-    // int socketConnect;
-    // std::string my_server_ip = MY_SERVER_IP_STRING;
-    // int my_server_port = STUDENT_SERVER_PORT;
-    // std::string message_to_send = my_server_ip + ":" + std::to_string(my_server_port);
-    // int socketSend;
-    // char reciveBuffer[1024];
-
-    // clientFd = socket(AF_INET, SOCK_STREAM, 0);
-    // if (clientFd < 0)
-    // {
-    //     std::cerr << "Socket creation error" << std::endl;
-    // }
-    // memset(&registryServerAddr, 0, sizeof(registryServerAddr));
-    // registryServerAddr.sin_family = AF_INET;
-    // registryServerAddr.sin_port = htons(INSTRUCTOR_REGISTRY_PORT);
-    // registryServerInet = inet_pton(AF_INET, INSTRUCTOR_REGISTRY_IP, &registryServerAddr.sin_addr);
-    // if (registryServerInet == 0)
-    // {
-    //     std::cerr << "Registry server ip conversion failed" << std::endl;
-    // }
-
-    // socketConnect = connect(clientFd, (struct sockaddr *)&registryServerAddr, sizeof(registryServerAddr));
-
-    // if (socketConnect < 0)
-    // {
-    //     std::cerr << "Connection failed" << std::endl;
-    //     close(clientFd);
-    // }
-
-    // socketSend = send(clientFd, message_to_send.c_str(), message_to_send.length(), 0);
-    // if (socketSend == -1)
-    // {
-    //     std::cerr << "Failed to send" << std::endl;
-    // }
-    // std::cout << "Sent to Registry Server: " << message_to_send << std::endl;
-    // recv(clientFd, &reciveBuffer, sizeof(reciveBuffer) - 1, 0);
-    // close(clientFd);
-
     return 0;
+}
+
+void errorCheck(int var, std::string msg)
+{
+    if (var < 0)
+    {
+        std::cerr << msg << ": " << errno << std::endl;
+    }
+}
+
+void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sendMsg, std::string connectMsg, bool sendUrgent)
+{
+    std::cout << "Scenario " << numb << std::endl;
+    sendReturn = send(clientfd, sendMsg, strlen(sendMsg), 0);
+    errorCheck(sendReturn, connectMsg);
+    std::cout << "Sent: " << sendMsg << std::endl;
+
+    if (sendUrgent)
+    {
+        sendReturn = send(clientfd, "U", 1, MSG_OOB);
+        errorCheck(sendReturn, "Send one byte error");
+    }
+    char buffer[1024];
+    int reciveBytes = recv(clientfd, buffer, sizeof(buffer), 0);
+    errorCheck(reciveBytes, "Recieve error");
+
+    if (reciveBytes > 0)
+    {
+        buffer[reciveBytes] = '\0';
+        std::cout << "Recived: " << buffer << std::endl;
+    }
 }
