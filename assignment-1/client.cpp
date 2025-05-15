@@ -9,20 +9,25 @@
 #define SERVER_PORT 8080
 #define IP_TO_LISTEN_TO "127.0.0.1"
 
-void errorCheck(int var, std::string msg);
-void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sendMsg, std::string connectMsg, bool sendUrgent);
+void errorCheck(int var, const char *msg);
+void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sendMsg, const char *connectMsg, bool sendUrgent, const char *recvMsg, bool urgentNoData);
 
 int main()
 {
     int clientSocket;
     int socketConnectReturn;
     int socketSendReturn;
-    std::string dataToSend = "NORMAL_DATA:Hello";
-    std::string socketConnectMsg = "Socket connect msg";
+    const char *dataToSend = "NORMAL_DATA:Hello";
     const char *socketSendMsg1 = "NORMAL_DATA:Hello";
     const char *socketSendMsg2 = "SEND_URGENT_REQUEST";
+    const char *socketSendMsg3 = "SEND_URGENT_REQUEST";
+    const char *socketSendMsg4 = "TEST_GARBAGE";
+    const char *socketConnectMsg = "Socket connection, error type";
+    const char *socketCreationErr = "Socket creation, error type";
+    const char *socketRecvError = "Socket recv, error type";
 
     clientSocket = socket(AF_INET, SOCK_STREAM, 0);
+    errorCheck(clientSocket, socketCreationErr);
     std::string message_to_send = dataToSend;
 
     sockaddr_in serverAddress;
@@ -40,24 +45,29 @@ int main()
     socketConnectReturn = connect(clientSocket, (struct sockaddr *)&serverAddress, sizeof(serverAddress));
     errorCheck(socketConnectReturn, socketConnectMsg);
 
-    sendAndReceiveFunc('1', socketSendReturn, clientSocket, socketSendMsg1, socketConnectMsg, false);
+    sendAndReceiveFunc('1', socketSendReturn, clientSocket, socketSendMsg1, socketConnectMsg, false, socketRecvError, false);
     std::cout << std::endl;
-    sendAndReceiveFunc('2', socketSendReturn, clientSocket, socketSendMsg2, socketConnectMsg, true);
+    sendAndReceiveFunc('2', socketSendReturn, clientSocket, socketSendMsg2, socketConnectMsg, true, socketRecvError, false);
+    std::cout << std::endl;
+    sendAndReceiveFunc('3', socketSendReturn, clientSocket, socketSendMsg3, socketConnectMsg, false, socketRecvError, true);
+    std::cout << std::endl;
+    sendAndReceiveFunc('4', socketSendReturn, clientSocket, socketSendMsg4, socketConnectMsg, false, socketRecvError, false);
 
     close(clientSocket);
 
     return 0;
 }
 
-void errorCheck(int var, std::string msg)
+void errorCheck(int var, const char *msg)
 {
     if (var < 0)
     {
-        std::cerr << msg << ": " << errno << std::endl;
+        std::cerr << "Something went wrong with: ";
+        perror(msg);
     }
 }
 
-void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sendMsg, std::string connectMsg, bool sendUrgent)
+void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sendMsg, const char *connectMsg, bool sendUrgent, const char *recvMsg, bool urgentNoData)
 {
     std::cout << "Scenario " << numb << std::endl;
     sendReturn = send(clientfd, sendMsg, strlen(sendMsg), 0);
@@ -69,9 +79,14 @@ void sendAndReceiveFunc(char numb, int sendReturn, int clientfd, const char *sen
         sendReturn = send(clientfd, "U", 1, MSG_OOB);
         errorCheck(sendReturn, "Send one byte error");
     }
+    if (urgentNoData)
+    {
+        std::string data = "NORMAL_AFTER_REQUEST";
+        sendReturn = send(clientfd, data.c_str(), data.length(), 0);
+    }
     char buffer[1024];
     int reciveBytes = recv(clientfd, buffer, sizeof(buffer), 0);
-    errorCheck(reciveBytes, "Recieve error");
+    errorCheck(reciveBytes, recvMsg);
 
     if (reciveBytes > 0)
     {
