@@ -48,12 +48,10 @@ int main()
             char buffer[1024];
             int reciveBytes = recv(clientSocket, buffer, sizeof(buffer), 0);
             errorCheck(reciveBytes, socketReciveMsg);
-
             if (reciveBytes > 0)
             {
                 buffer[reciveBytes] = '\0';
                 std::cout << "Received: " << buffer << std::endl;
-
                 if (strcmp(buffer, "NORMAL_DATA:Hello") == 0)
                 {
                     socketSendHandler(normalRequestMsg, clientSocket, socketSendNormalMsg);
@@ -69,22 +67,7 @@ int main()
                     }
                     else
                     {
-                        int trailingBytes = recv(clientSocket, buffer, sizeof(buffer), 0);
-                        // if (trailingBytes > 0)
-                        // {
-                        //     buffer[trailingBytes] = '\0';
-                        //     std::string serverMsg = "NORMAL_DATA:" + std::string(buffer);
-                        //     socketSendHandler(serverMsg, clientSocket, "Normal data trailing, error type");
-                        // }
-                        if (trailingBytes == 0)
-                        {
-                            std::cout << "Client disconnected." << std::endl;
-                            std::cout << std::endl;
-                            break;
-                        }
-                        {
-                            socketSendHandler(noUrgentData, clientSocket, socketSendNoUrgentMsg);
-                        }
+                        socketSendHandler(noUrgentData, clientSocket, socketSendNoUrgentMsg);
                     }
                 }
                 else
@@ -96,11 +79,10 @@ int main()
             {
                 std::cout << "Client disconnected" << std::endl;
                 std::cout << std::endl;
-
+                close(clientSocket);
                 break;
             }
         }
-        close(clientSocket);
         std::cout << "Waiting for new connection..." << std::endl;
     }
     close(serverSocketFd);
