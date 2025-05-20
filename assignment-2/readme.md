@@ -32,3 +32,9 @@ make
 
 
 ```
+
+
+// Reason for poll()
+- poll() uses array of structs and select() uses bit masks
+- poll() is more scalable, no fixed limit on number of fd's
+- poll() newer 
