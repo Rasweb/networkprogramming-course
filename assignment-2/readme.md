@@ -14,9 +14,14 @@
 ```
 cd build
 
+// when changes to the cmake
 cmake ..
 
+// When changes to cpp file
 make
+
+./robust
+
 
 ```
 
