@@ -15,6 +15,7 @@
 #include <functional>
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 10
+#define BUFFER_SIZE 1024
 #define IP_TO_LISTEN_TO "127.0.0.1"
 
 /* Usage
@@ -134,77 +135,30 @@ public:
 
 void errorCheck(int var, const char *msg);
 int socketConfig();
-void pollConf();
+bool set_non_blocking(int sockfd);
+void selectLoop(int server_fd, ThreadPool *pool);
 
 // Implement comments for docs
+// Netcat for clients
 int main()
 {
 
-  // Netcat for clients
+  /* Usage
+- start() to initialize
+- queueJob() to add tasks
+- call stop() when done
+*/
+  ThreadPool newPool;
+  newPool.start();
   int socketFd;
   socketFd = socketConfig();
+  selectLoop(socketFd, &newPool);
 
-  // 1
-  /*threadpool class
-    - constructor
-    - destructor
-    - enqueue
-    - thread
-    - mutex
+  /*
+  Implement buffering for partial reads and writes. If recv returns fewer bytes than expected, buffer the data until a complete message is
+  received. Similarly, handle partial writes by looping until the entire response is sent.
   */
-  /* worker threads
-  - Create a pool of worker threads in the ThreadPool constructor.
-  - Each worker thread should continuously check for tasks in a task queue.
-  - Use a std::queue to manage tasks and a std::mutex to protect access to the queue.
-  */
-  /* Task queue
-  Task Queue:
-  - Implement a synchronized task queue using a std::mutex and std::condition_variable.
-  - The enqueue method should add tasks to the queue and notify a worker thread to process the task.
-  */
-  /* Task processing
-  - Worker threads should pick up tasks from the queue, process them, and send responses back to clients.
-  */
-
-  // 2
-  /* I/O multiplexing poll()
-  - poll() to monitor listening socket and all connected clients
-  - pollfd array to keep track of file descriptors
- */
-  /* new connections
-  -When poll() indicates that the listening socket is ready for reading, accept the new connection using accept().
-  - Add the new client socket to the pollfd array for monitoring.
-  */
-  /* Client requests
-  - When poll() indicates that a client socket is ready for reading, read the incoming data from the client.
-- Dispatch the request to a worker thread from the thread pool for processing.
-  */
-  /* responses
-- After a worker thread processes the request, it should send the response back to the client.
- -Use poll() to monitor the client socket for writability and send the response.
-  */
-
-  /* thread
-- vector of threads
-- create thread pool
-  - https://www.geeksforgeeks.org/thread-pool-in-cpp/
-  - https://stackoverflow.com/questions/15752659/thread-pooling-in-c11
-  - https://dev.to/ish4n10/making-a-thread-pool-in-c-from-scratch-bnm
-  - https://medium.com/@lionkor/writing-a-simple-and-effective-thread-pool-in-c-b7675c501da7
-*/
-
-  /* poll
-  - while(1)
-  - loop with fds.size()
-    - accept new connection
-    - push into fds[] (add new socket to array)
-  - else
-    - handle client data
-    - read data and dispatch to worker thread for processing
-
-
-  */
-
+  newPool.stop();
   printf("Hejehje");
 
   return 0;
@@ -257,56 +211,176 @@ int socketConfig()
   return socketFd;
 }
 
-void pollConf()
+// Sets a socket to non-blocking
+bool set_non_blocking(int sockfd)
 {
-  // Info - https://thelinuxcode.com/use-poll-system-call-c/
+  int flags = fcntl(sockfd, F_GETFL, 0);
 
-  /* poll() info
+  if (flags == -1)
+  {
+    perror("fcntl F_GETFL");
+    return false;
+  }
 
-   int poll(struct pollfd *fds, nfds_t nfds, int timeout);
-   - fds – Array of pollfd structures representing the file descriptors to monitor
-   - nfds – Number of pollfd structures provided in fds array
-   - timeout – Maximum time to wait for an event in milliseconds
+  if (fcntl(sockfd, F_SETFL, flags | O_NONBLOCK) == -1)
+  {
+    perror("fcntl F_SETFL O_NONBLOCK");
+    return false;
+  }
 
+  return true;
+}
 
-   To use poll():
-   1. First initialize an array of pollfd structures, one for each fd you want to monitor.
-   2. For each pollfd, set the .fd field to the descriptor and .events to the event(s) to check for.
-   3. Call poll() passing your pollfd array and a timeout.
-   4. When poll() returns, check the .revents field of each pollfd to see which are ready.
+/* Configures and manages a server using the select() system call to handle multiple client connections.
+- Initializes file descriptor(fd) sets for monitoring multiple sockets.
+- New connections: Accepting them and adding their sockets to monitored set.
+- Existing connections, it reads incoming data aznd echoes it back to the client.
+*/
+void selectLoop(int server_fd, ThreadPool *pool)
+{
 
-  */
+  fd_set master_fds, read_fds;
+  int max_fd;
+  int active_clients = 0;
+  struct timeval tv;
+  tv.tv_sec = 30;
 
-  std::vector<pollfd> fds;
-  /* poll() config
-  - poll()
-  - std::vector<pollfd> fds;
-  - fds.push_back({server_fd, POLLIN, 0});
-  */
+  FD_ZERO(&master_fds);
+  FD_ZERO(&read_fds);
 
-  // // array of sockets to monitor
-  // int sockfds[10];
+  FD_SET(server_fd, &master_fds); // master_fds = 0000 0100
+  max_fd = server_fd;
 
-  // // fill sockfds array with connected sockets
-  // struct pollfd pollfds[10];
+  std::cout << "Server listening on port: " << SERVER_PORT << " (using select)..."
+            << std::endl;
 
-  // // initialize pollfd array
-  // for (int i = 0; i < 10; i++)
-  // {
-  //   /* code */
-  //   pollfds[i].fd = sockfds[i];
-  //   pollfds[i].events = POLLIN;
-  // }
+  while (true)
+  {
+    read_fds = master_fds;
 
-  // // wait for data on any socket
-  // int ready = poll(pollfds, 10, -1);
+    int activity = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
 
-  // for (int i = 0; i < 10; i++)
-  // {
-  //   /* code */
-  //   if (pollfds[i].revents & POLLIN)
-  //   {
-  //     // Socket i has data, can read without blocking
-  //   }
-  // }
+    if (activity < 0 && errno != EINTR)
+    {
+      perror("Select error");
+      break;
+    }
+
+    if (activity == 0)
+    {
+      // Shouldn't happen when TIMEOUT == NULL!
+      continue;
+    }
+
+    if (FD_ISSET(server_fd, &read_fds))
+    {
+      if (active_clients >= MAX_CLIENTS)
+      {
+        std::cout << "Maximum number of clients reached. Refusing connection" << std::endl;
+        struct sockaddr_in temp_client_addr;
+        socklen_t temp_client_addr_len = sizeof(temp_client_addr);
+        accept(server_fd, (struct sockaddr *)&temp_client_addr, &temp_client_addr_len);
+      }
+      else
+      {
+
+        // Someone has connected!
+        struct sockaddr_in temp_client_addr;
+        socklen_t temp_client_addr_len = sizeof(temp_client_addr);
+
+        int new_client_sock =
+            accept(server_fd, (struct sockaddr *)&temp_client_addr,
+                   &temp_client_addr_len);
+
+        // TODO fix timeout for socket
+        int optErr;
+        optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_SNDTIMEO, (struct timeval *)&tv, sizeof(struct timeval));
+        if (optErr < 0)
+        {
+          std::cout << "Error";
+        }
+        optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_RCVTIMEO, (struct timeval *)&tv, sizeof(struct timeval));
+        if (optErr < 0)
+        {
+          std::cout << "Error";
+        }
+
+        if (new_client_sock < 0)
+        {
+          if (errno == EAGAIN || errno == EWOULDBLOCK)
+          {
+            continue;
+          }
+          perror("Error accepting socket!");
+          continue;
+        }
+        char client_ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &temp_client_addr.sin_addr, client_ip_str,
+                  INET_ADDRSTRLEN);
+        std::cout << "Accepted connection from " << client_ip_str << ":"
+                  << ntohs(temp_client_addr.sin_port) << std::endl;
+        if (!set_non_blocking(new_client_sock))
+        {
+          close(new_client_sock);
+          continue;
+        }
+
+        FD_SET(new_client_sock, &master_fds);
+        if (new_client_sock > max_fd)
+        {
+          max_fd = new_client_sock;
+        }
+        active_clients++;
+      }
+    }
+
+    for (int i = 0; i <= max_fd; i++)
+    {
+      if (i == server_fd)
+      {
+        continue;
+      }
+      if (FD_ISSET(i, &read_fds))
+      {
+        char buffer[BUFFER_SIZE];
+        memset(buffer, 0, sizeof(buffer));
+        ssize_t bytes_read = recv(i, buffer, BUFFER_SIZE - 1, 0);
+        if (bytes_read > 0)
+        {
+          buffer[bytes_read] = '\0';
+          std::cout << "Received from socket: " << buffer << std::endl;
+
+          pool->queueJob([i, buffer, bytes_read]()
+                         {
+                           std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
+                           int senderr = send(i, buffer, bytes_read, 0); // echos data back to client
+                           if (senderr == -1) {
+                             std::cerr << "Failed to send data to client." << std::endl;
+                           } else {
+                             std::cout << "Sent " << senderr << " bytes to client." << std::endl;
+                           } });
+        }
+        if (bytes_read == 0)
+        {
+          {
+            std::cout << "Client on socket disconnected." << std::endl;
+            close(i);
+            FD_CLR(i, &master_fds);
+            active_clients--;
+          }
+        }
+        if (bytes_read < 0)
+        {
+          if (errno != EAGAIN || errno != EWOULDBLOCK)
+          {
+            perror("recv failed");
+            std::cerr << "Error on recv" << std::endl;
+            close(i);
+            FD_CLR(i, &master_fds);
+            active_clients--;
+          }
+        }
+      }
+    }
+  }
 }

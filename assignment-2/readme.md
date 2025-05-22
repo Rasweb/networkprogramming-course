@@ -1,16 +1,21 @@
-## Table of contents
+<h1 style="text-align:center">Table of contents</h1>
+<ul>
+    <li><a htef="#overview">Overview</a></li>
+    <li><a htef="#build-process">Build Process</a></li>
+    <li><a htef="#built-with">Built With</a></li>
+    <li><a htef="#in-action">In Action</a></li>
+</ul>
 
-- [Overview](#overview)
-  - [](#)
-  - [Build process](#build-process)
-  - [Built with](#built-with)
-  - [In Action](#in-action)
+<h1 style="text-align:center">Overview</h1>
 
-## Overview
-### 
-           
-    
-### Build process
+<h3>Assignment 2 - Robust Server</h3>
+
+
+<p>
+
+</p>
+<h2>Build process</h2>
+
 ```
 cd build
 
@@ -25,21 +30,13 @@ make
 
 ```
 
-### Built with
+<h3>Built with</h3>
 
 - s
 
-### In Action
-
-// Display text
-
+<h3>In Action</h3>
+<p>Hej</p>
 ```
 
 
 ```
-
-
-// Reason for poll()
-- poll() uses array of structs and select() uses bit masks
-- poll() is more scalable, no fixed limit on number of fd's
-- poll() newer 

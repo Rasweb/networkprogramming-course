@@ -5,11 +5,13 @@ cmake_minimum_required(VERSION 3.10)
 project(robust-server)
 
 # Set the C++ standard (e.g., C++11, C++14, C++17)
-set(CMKAE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 11)
 
 # Specify the C++ standard required
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+# Compiler warning flags
+set(CMAKE_CXX_FLAGS "${MAKE_CXX_FLAGS} -Wall ")
 
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
@@ -17,4 +19,4 @@ find_package(Threads REQUIRED)
 
 # Add the executable
 add_executable(robust robust_server.cpp)
-# target_link_libraries(robust_server PRIVATE Threads::Threads)
+target_link_libraries(robust PRIVATE Threads::Threads)
