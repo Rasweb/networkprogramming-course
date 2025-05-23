@@ -13,6 +13,8 @@
 #include <condition_variable>
 #include <queue>
 #include <functional>
+#include <chrono>
+#include <map>
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 10
 #define BUFFER_SIZE 1024
@@ -135,7 +137,8 @@ public:
 
 void errorCheck(int var, const char *msg);
 int socketConfig();
-bool set_non_blocking(int sockfd);
+bool setNonBlocking(int sockfd);
+void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &last_active, std::chrono::seconds timeout, fd_set *master_fds, int *active_clients);
 void selectLoop(int server_fd, ThreadPool *pool);
 
 // Implement comments for docs
@@ -173,6 +176,7 @@ void errorCheck(int var, const char *msg)
   }
 }
 
+// Does the initial socket configs
 int socketConfig()
 {
   int socketFd;
@@ -210,8 +214,8 @@ int socketConfig()
   return socketFd;
 }
 
-// Sets a socket to non-blocking
-bool set_non_blocking(int sockfd)
+
+bool setNonBlocking(int sockfd)
 {
   int flags = fcntl(sockfd, F_GETFL, 0);
 
@@ -230,11 +234,37 @@ bool set_non_blocking(int sockfd)
   return true;
 }
 
-/* Configures and manages a server using the select() system call to handle multiple client connections.
-- Initializes file descriptor(fd) sets for monitoring multiple sockets.
-- New connections: Accepting them and adding their sockets to monitored set.
-- Existing connections, it reads incoming data aznd echoes it back to the client.
-*/
+// Goes through a map of clients and last_active time.
+// If it a client has passed the timeout close it.
+// Removes the file descriptor from the set.
+// Decreases the active_clients variable.
+// Also removes it from the map.
+void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &last_active, std::chrono::seconds timeout, fd_set *master_fds, int *active_clients)
+{
+  auto now = std::chrono::steady_clock::now();
+  for (auto it = last_active.begin(); it != last_active.end();)
+  {
+    if (now - it->second > timeout)
+    {
+      int sock = it->first;
+      std::cout << "Disconnecting idle client" << sock << std::endl;
+      close(sock);
+      FD_CLR(sock, master_fds);
+      (*active_clients)--;
+      it = last_active.erase(it);
+      std::cout << "Nr of active clients: " << *active_clients << std::endl;
+    }
+    else
+    {
+      ++it;
+    }
+  }
+}
+
+// Configures and manages a server using the select() system call to handle multiple client connections.
+// Initializes file descriptor(fd) sets for monitoring multiple sockets.
+// New connections: Accepting them and adding their sockets to monitored set.
+// Existing connections, it reads incoming data aznd echoes it back to the client.
 void selectLoop(int server_fd, ThreadPool *pool)
 {
 
@@ -251,6 +281,9 @@ void selectLoop(int server_fd, ThreadPool *pool)
   FD_SET(server_fd, &master_fds); // master_fds = 0000 0100
   max_fd = server_fd;
 
+  // Timmer
+  std::map<int, std::chrono::steady_clock::time_point> last_active;
+  const std::chrono::seconds timeout = std::chrono::seconds(30);
   std::cout << "Server listening on port: " << SERVER_PORT << " (using select)..."
             << std::endl;
 
@@ -259,16 +292,19 @@ void selectLoop(int server_fd, ThreadPool *pool)
     read_fds = master_fds;
 
     int activity = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
+    errorCheck(activity, "select error");
 
-    if (activity < 0 && errno != EINTR)
+    if (activity < 0)
     {
       perror("Select error");
       break;
     }
 
+    // Handle idle clients
+    handleIdleDuration(last_active, timeout, &master_fds, &active_clients);
+
     if (activity == 0)
     {
-      // Shouldn't happen when TIMEOUT == NULL!
       continue;
     }
 
@@ -279,20 +315,21 @@ void selectLoop(int server_fd, ThreadPool *pool)
         std::cout << "Maximum number of clients reached. Refusing connection" << std::endl;
         struct sockaddr_in temp_client_addr;
         socklen_t temp_client_addr_len = sizeof(temp_client_addr);
-        accept(server_fd, (struct sockaddr *)&temp_client_addr, &temp_client_addr_len);
+        int temp = accept(server_fd, (struct sockaddr *)&temp_client_addr, &temp_client_addr_len);
+        const char *msg = "Server is full!";
+        int sent = send(temp, msg, strlen(msg), 0);
+        close(temp);
       }
       else
       {
-
-        // Someone has connected!
         struct sockaddr_in temp_client_addr;
         socklen_t temp_client_addr_len = sizeof(temp_client_addr);
 
         int new_client_sock =
             accept(server_fd, (struct sockaddr *)&temp_client_addr,
                    &temp_client_addr_len);
+        last_active[new_client_sock] = std::chrono::steady_clock::now();
 
-        // TODO fix timeout for socket
         int optErr;
         optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_SNDTIMEO, (struct timeval *)&tv, sizeof(struct timeval));
         if (optErr < 0)
@@ -314,12 +351,13 @@ void selectLoop(int server_fd, ThreadPool *pool)
           perror("Error accepting socket!");
           continue;
         }
+
         char client_ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &temp_client_addr.sin_addr, client_ip_str,
                   INET_ADDRSTRLEN);
         std::cout << "Accepted connection from " << client_ip_str << ":"
                   << ntohs(temp_client_addr.sin_port) << std::endl;
-        if (!set_non_blocking(new_client_sock))
+        if (!setNonBlocking(new_client_sock))
         {
           close(new_client_sock);
           continue;
@@ -331,6 +369,7 @@ void selectLoop(int server_fd, ThreadPool *pool)
           max_fd = new_client_sock;
         }
         active_clients++;
+        std::cout << "Nr of active clients: " << active_clients << std::endl;
       }
     }
 
@@ -347,22 +386,30 @@ void selectLoop(int server_fd, ThreadPool *pool)
         ssize_t bytes_read = recv(i, buffer, BUFFER_SIZE - 1, 0);
         if (bytes_read > 0)
         {
+          last_active[i] = std::chrono::steady_clock::now();
           buffer[bytes_read] = '\0';
           std::cout << "Received from socket: " << buffer << std::endl;
 
-          pool->queueJob([i, buffer, bytes_read]()
-                         {
-                           std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
-                           int senderr = send(i, buffer, bytes_read, 0); // echos data back to client
-                           if (senderr == -1) {
-                             std::cerr << "Failed to send data to client." << std::endl;
-                           } else {
-                             std::cout << "Sent " << senderr << " bytes to client." << std::endl;
-                           } });
+          pool->queueJob([i, buffer, bytes_read](){
+            std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
+            ssize_t total_sent = 0;
+            while (total_sent < bytes_read){
+              int sent = send(i, buffer, bytes_read, 0); 
+              if (sent == -1) {
+                std::cerr << "Failed to send data to client." << std::endl;
+                break;
+              } 
+              total_sent += sent;
+            }
+            if(total_sent == bytes_read){
+              std::cout << "Sent " << total_sent << " bytes to client." << std::endl;
+            }
+          });
         }
         if (bytes_read == 0)
         {
           {
+            last_active.erase(i);
             if (max_fd == i)
             {
               for (int i = 0; i <= max_fd; i++)
@@ -383,6 +430,7 @@ void selectLoop(int server_fd, ThreadPool *pool)
         {
           if (errno != EAGAIN || errno != EWOULDBLOCK)
           {
+            last_active.erase(i);
             perror("recv failed");
             std::cerr << "Error on recv" << std::endl;
             close(i);
