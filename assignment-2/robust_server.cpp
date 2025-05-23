@@ -159,7 +159,6 @@ int main()
   received. Similarly, handle partial writes by looping until the entire response is sent.
   */
   newPool.stop();
-  printf("Hejehje");
 
   return 0;
 }
@@ -244,6 +243,7 @@ void selectLoop(int server_fd, ThreadPool *pool)
   int active_clients = 0;
   struct timeval tv;
   tv.tv_sec = 30;
+  tv.tv_usec = 0;
 
   FD_ZERO(&master_fds);
   FD_ZERO(&read_fds);
@@ -363,6 +363,16 @@ void selectLoop(int server_fd, ThreadPool *pool)
         if (bytes_read == 0)
         {
           {
+            if (max_fd == i)
+            {
+              for (int i = 0; i <= max_fd; i++)
+              {
+                if (i > max_fd)
+                {
+                  max_fd = i;
+                }
+              }
+            }
             std::cout << "Client on socket disconnected." << std::endl;
             close(i);
             FD_CLR(i, &master_fds);
