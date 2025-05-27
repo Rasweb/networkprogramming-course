@@ -17,8 +17,9 @@
 #include <map>
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 10
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 10
 #define IP_TO_LISTEN_TO "127.0.0.1"
+#define TIMEOUT 30
 
 /* Usage
 - start() to initialize
@@ -139,10 +140,9 @@ void errorCheck(int var, const char *msg);
 int socketConfig();
 bool setNonBlocking(int sockfd);
 void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &last_active, std::chrono::seconds timeout, fd_set *master_fds, int *active_clients);
+void handleMaxClients(int active_clients, int server_fd);
 void selectLoop(int server_fd, ThreadPool *pool);
 
-// Implement comments for docs
-// Netcat for clients
 int main()
 {
 
@@ -214,7 +214,6 @@ int socketConfig()
   return socketFd;
 }
 
-
 bool setNonBlocking(int sockfd)
 {
   int flags = fcntl(sockfd, F_GETFL, 0);
@@ -250,6 +249,10 @@ void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &la
       std::cout << "Disconnecting idle client" << sock << std::endl;
       close(sock);
       FD_CLR(sock, master_fds);
+      if (*active_clients < 0)
+      {
+        *active_clients = 0;
+      }
       (*active_clients)--;
       it = last_active.erase(it);
       std::cout << "Nr of active clients: " << *active_clients << std::endl;
@@ -257,6 +260,31 @@ void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &la
     else
     {
       ++it;
+    }
+  }
+}
+
+// Handles max clients using std::chrono
+void handleMaxClients(int active_clients, int server_fd)
+{
+  std::cout << "Maximum number of clients reached. Refusing connection" << std::endl;
+  struct sockaddr_in temp_client_addr;
+  socklen_t temp_client_addr_len = sizeof(temp_client_addr);
+  int temp = accept(server_fd, (struct sockaddr *)&temp_client_addr, &temp_client_addr_len);
+  const char *msg = "Server is full!";
+  int sent = send(temp, msg, strlen(msg), 0);
+  if (sent < 0)
+  {
+    if (errno == EAGAIN || errno == EWOULDBLOCK)
+    {
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      return;
+    }
+    else
+    {
+      perror("send failed");
+      close(temp);
+      return;
     }
   }
 }
@@ -272,7 +300,7 @@ void selectLoop(int server_fd, ThreadPool *pool)
   int max_fd;
   int active_clients = 0;
   struct timeval tv;
-  tv.tv_sec = 30;
+  tv.tv_sec = TIMEOUT;
   tv.tv_usec = 0;
 
   FD_ZERO(&master_fds);
@@ -283,7 +311,7 @@ void selectLoop(int server_fd, ThreadPool *pool)
 
   // Timmer
   std::map<int, std::chrono::steady_clock::time_point> last_active;
-  const std::chrono::seconds timeout = std::chrono::seconds(30);
+  const std::chrono::seconds timeout = std::chrono::seconds(TIMEOUT);
   std::cout << "Server listening on port: " << SERVER_PORT << " (using select)..."
             << std::endl;
 
@@ -312,13 +340,7 @@ void selectLoop(int server_fd, ThreadPool *pool)
     {
       if (active_clients >= MAX_CLIENTS)
       {
-        std::cout << "Maximum number of clients reached. Refusing connection" << std::endl;
-        struct sockaddr_in temp_client_addr;
-        socklen_t temp_client_addr_len = sizeof(temp_client_addr);
-        int temp = accept(server_fd, (struct sockaddr *)&temp_client_addr, &temp_client_addr_len);
-        const char *msg = "Server is full!";
-        int sent = send(temp, msg, strlen(msg), 0);
-        close(temp);
+        handleMaxClients(active_clients, server_fd);
       }
       else
       {
@@ -384,27 +406,45 @@ void selectLoop(int server_fd, ThreadPool *pool)
         char buffer[BUFFER_SIZE];
         memset(buffer, 0, sizeof(buffer));
         ssize_t bytes_read = recv(i, buffer, BUFFER_SIZE - 1, 0);
+        if (bytes_read == BUFFER_SIZE - 1 && strchr(buffer, '\n') == nullptr)
+        {
+          std::cout << "Message too long for thread: " << std::this_thread::get_id() << std::endl;
+          const char *err = "Error: message too large\n";
+          send(i, err, strlen(err), 0);
+          continue;
+        }
         if (bytes_read > 0)
         {
           last_active[i] = std::chrono::steady_clock::now();
           buffer[bytes_read] = '\0';
           std::cout << "Received from socket: " << buffer << std::endl;
 
-          pool->queueJob([i, buffer, bytes_read](){
-            std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
-            ssize_t total_sent = 0;
-            while (total_sent < bytes_read){
-              int sent = send(i, buffer, bytes_read, 0); 
-              if (sent == -1) {
-                std::cerr << "Failed to send data to client." << std::endl;
-                break;
-              } 
-              total_sent += sent;
-            }
+          pool->queueJob([i, buffer, bytes_read]()
+                         {
+                std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
+                ssize_t total_sent = 0;
+                while (total_sent < bytes_read){
+                  int sent = send(i, buffer + total_sent, bytes_read - total_sent, 0); 
+                  if (sent == -1) {
+                    std::cerr << "Failed to send data to client." << std::endl;
+                    break;
+                  }
+                  if (sent < 0) {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                      continue;
+                    }
+                  else {
+                    perror("send failed");
+                    close(i);
+                    break;
+                  }
+                  } 
+                  total_sent += sent;
+                }
             if(total_sent == bytes_read){
               std::cout << "Sent " << total_sent << " bytes to client." << std::endl;
-            }
-          });
+            } });
         }
         if (bytes_read == 0)
         {
