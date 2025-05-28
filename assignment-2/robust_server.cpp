@@ -6,7 +6,6 @@
 #include <arpa/inet.h>
 #include <string>
 #include <thread>
-#include <poll.h>
 #include <fcntl.h>
 #include <vector>
 #include <mutex>
@@ -17,7 +16,7 @@
 #include <map>
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 10
-#define BUFFER_SIZE 10
+#define BUFFER_SIZE 4096
 #define IP_TO_LISTEN_TO "127.0.0.1"
 #define TIMEOUT 30
 
@@ -136,33 +135,34 @@ public:
   }
 };
 
+struct SelectServerState{
+  fd_set master_fds;
+  fd_set read_fds;
+  int max_fd;
+  int active_clients = 0;
+  struct timeval tv;
+  std::map<int, std::string> client_buffer;
+  // Timer
+  std::map<int, std::chrono::steady_clock::time_point> last_active;
+  std::chrono::seconds timeout;
+};
+
 void errorCheck(int var, const char *msg);
 int socketConfig();
 bool setNonBlocking(int sockfd);
 void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &last_active, std::chrono::seconds timeout, fd_set *master_fds, int *active_clients);
 void handleMaxClients(int active_clients, int server_fd);
+void handleIncomingMessages(std::map<int, std::string> &client_buffer, int i, std::map<int, std::chrono::steady_clock::time_point> &last_active, char buffer[], ssize_t bytes_read, ThreadPool *pool);
 void selectLoop(int server_fd, ThreadPool *pool);
 
 int main()
 {
-
-  /* Usage
-- start() to initialize
-- queueJob() to add tasks
-- call stop() when done
-*/
   ThreadPool newPool;
   newPool.start();
   int socketFd;
   socketFd = socketConfig();
   selectLoop(socketFd, &newPool);
-
-  /*
-  Implement buffering for partial reads and writes. If recv returns fewer bytes than expected, buffer the data until a complete message is
-  received. Similarly, handle partial writes by looping until the entire response is sent.
-  */
   newPool.stop();
-
   return 0;
 }
 
@@ -176,7 +176,6 @@ void errorCheck(int var, const char *msg)
   }
 }
 
-// Does the initial socket configs
 int socketConfig()
 {
   int socketFd;
@@ -238,7 +237,11 @@ bool setNonBlocking(int sockfd)
 // Removes the file descriptor from the set.
 // Decreases the active_clients variable.
 // Also removes it from the map.
-void handleIdleDuration(std::map<int, std::chrono::steady_clock::time_point> &last_active, std::chrono::seconds timeout, fd_set *master_fds, int *active_clients)
+void handleIdleDuration(
+  std::map<int, std::chrono::steady_clock::time_point> &last_active, 
+  std::chrono::seconds timeout, 
+  fd_set *master_fds, 
+  int *active_clients)
 {
   auto now = std::chrono::steady_clock::now();
   for (auto it = last_active.begin(); it != last_active.end();)
@@ -289,6 +292,57 @@ void handleMaxClients(int active_clients, int server_fd)
   }
 }
 
+// Handles incoming messages from client
+// Checks if msg contains a newline else it will leave the function
+// If a valid msg is recieved the it will use the threadpool and work
+void handleIncomingMessages(
+  std::map<int, std::string> &client_buffer, 
+  int i, 
+  std::map<int, std::chrono::steady_clock::time_point> &last_active, 
+  char buffer[], 
+  ssize_t bytes_read, 
+  ThreadPool *pool)
+{
+  size_t pos;
+  //std::string::npos means not found
+  while ((pos = client_buffer[i].find('\n')) != std::string::npos)
+  {
+    std::string message = client_buffer[i].substr(0, pos + 1);
+    client_buffer[i].erase(0, pos + 1);
+
+    last_active[i] = std::chrono::steady_clock::now();
+    buffer[bytes_read] = '\0';
+    std::cout << "Received from socket: " << buffer << std::endl;
+
+    pool->queueJob([i, buffer, bytes_read](){
+      std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
+      ssize_t total_sent = 0;
+      while (total_sent < bytes_read){
+        int sent = send(i, buffer + total_sent, bytes_read - total_sent, 0); 
+        if (sent == -1) {
+          std::cerr << "Failed to send data to client." << std::endl;
+          break;
+        }
+        if (sent < 0) {
+          if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+          else {
+            perror("send failed");
+            close(i);
+            break;
+          }
+        } 
+        total_sent += sent;
+      }
+      if(total_sent == bytes_read){
+        std::cout << "Sent " << total_sent << " bytes to client." << std::endl;
+      } 
+    });
+  }
+}
+
 // Configures and manages a server using the select() system call to handle multiple client connections.
 // Initializes file descriptor(fd) sets for monitoring multiple sockets.
 // New connections: Accepting them and adding their sockets to monitored set.
@@ -296,30 +350,26 @@ void handleMaxClients(int active_clients, int server_fd)
 void selectLoop(int server_fd, ThreadPool *pool)
 {
 
-  fd_set master_fds, read_fds;
-  int max_fd;
-  int active_clients = 0;
-  struct timeval tv;
-  tv.tv_sec = TIMEOUT;
-  tv.tv_usec = 0;
+  SelectServerState state;
 
-  FD_ZERO(&master_fds);
-  FD_ZERO(&read_fds);
+  FD_ZERO(&state.master_fds);
+  FD_ZERO(&state.read_fds);
+  FD_SET(server_fd, &state.master_fds);
 
-  FD_SET(server_fd, &master_fds); // master_fds = 0000 0100
-  max_fd = server_fd;
+  state.max_fd = server_fd;
+  state.active_clients = 0;
+  state.tv.tv_sec = TIMEOUT;
+  state.tv.tv_usec = 0;
+  state.timeout = std::chrono::seconds(TIMEOUT);
 
-  // Timmer
-  std::map<int, std::chrono::steady_clock::time_point> last_active;
-  const std::chrono::seconds timeout = std::chrono::seconds(TIMEOUT);
   std::cout << "Server listening on port: " << SERVER_PORT << " (using select)..."
             << std::endl;
 
   while (true)
   {
-    read_fds = master_fds;
+    state.read_fds = state.master_fds;
 
-    int activity = select(max_fd + 1, &read_fds, NULL, NULL, &tv);
+    int activity = select(state.max_fd + 1, &state.read_fds, NULL, NULL, &state.tv);
     errorCheck(activity, "select error");
 
     if (activity < 0)
@@ -328,19 +378,18 @@ void selectLoop(int server_fd, ThreadPool *pool)
       break;
     }
 
-    // Handle idle clients
-    handleIdleDuration(last_active, timeout, &master_fds, &active_clients);
+    handleIdleDuration(state.last_active, state.timeout, &state.master_fds, &state.active_clients);
 
     if (activity == 0)
     {
       continue;
     }
 
-    if (FD_ISSET(server_fd, &read_fds))
+    if (FD_ISSET(server_fd, &state.read_fds))
     {
-      if (active_clients >= MAX_CLIENTS)
+      if (state.active_clients >= MAX_CLIENTS)
       {
-        handleMaxClients(active_clients, server_fd);
+        handleMaxClients(state.active_clients, server_fd);
       }
       else
       {
@@ -350,15 +399,15 @@ void selectLoop(int server_fd, ThreadPool *pool)
         int new_client_sock =
             accept(server_fd, (struct sockaddr *)&temp_client_addr,
                    &temp_client_addr_len);
-        last_active[new_client_sock] = std::chrono::steady_clock::now();
+        state.last_active[new_client_sock] = std::chrono::steady_clock::now();
 
         int optErr;
-        optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_SNDTIMEO, (struct timeval *)&tv, sizeof(struct timeval));
+        optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_SNDTIMEO, (struct timeval *)&state.tv, sizeof(struct timeval));
         if (optErr < 0)
         {
           std::cout << "Error";
         }
-        optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_RCVTIMEO, (struct timeval *)&tv, sizeof(struct timeval));
+        optErr = setsockopt(new_client_sock, SOL_SOCKET, SO_RCVTIMEO, (struct timeval *)&state.tv, sizeof(struct timeval));
         if (optErr < 0)
         {
           std::cout << "Error";
@@ -385,97 +434,71 @@ void selectLoop(int server_fd, ThreadPool *pool)
           continue;
         }
 
-        FD_SET(new_client_sock, &master_fds);
-        if (new_client_sock > max_fd)
+        FD_SET(new_client_sock, &state.master_fds);
+        if (new_client_sock > state.max_fd)
         {
-          max_fd = new_client_sock;
+          state.max_fd = new_client_sock;
         }
-        active_clients++;
-        std::cout << "Nr of active clients: " << active_clients << std::endl;
+        state.active_clients++;
+        std::cout << "Nr of active clients: " << state.active_clients << std::endl;
       }
     }
 
-    for (int i = 0; i <= max_fd; i++)
+    for (int i = 0; i <= state.max_fd; i++)
     {
       if (i == server_fd)
       {
         continue;
       }
-      if (FD_ISSET(i, &read_fds))
+      if (FD_ISSET(i, &state.read_fds))
       {
         char buffer[BUFFER_SIZE];
         memset(buffer, 0, sizeof(buffer));
         ssize_t bytes_read = recv(i, buffer, BUFFER_SIZE - 1, 0);
+        state.client_buffer[i].append(buffer, bytes_read);
         if (bytes_read == BUFFER_SIZE - 1 && strchr(buffer, '\n') == nullptr)
         {
           std::cout << "Message too long for thread: " << std::this_thread::get_id() << std::endl;
           const char *err = "Error: message too large\n";
           send(i, err, strlen(err), 0);
+          state.client_buffer[i].clear();
           continue;
         }
         if (bytes_read > 0)
         {
-          last_active[i] = std::chrono::steady_clock::now();
-          buffer[bytes_read] = '\0';
-          std::cout << "Received from socket: " << buffer << std::endl;
-
-          pool->queueJob([i, buffer, bytes_read]()
-                         {
-                std::cout << "Thread id:" << std::this_thread::get_id() << std::endl;
-                ssize_t total_sent = 0;
-                while (total_sent < bytes_read){
-                  int sent = send(i, buffer + total_sent, bytes_read - total_sent, 0); 
-                  if (sent == -1) {
-                    std::cerr << "Failed to send data to client." << std::endl;
-                    break;
-                  }
-                  if (sent < 0) {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                      std::this_thread::sleep_for(std::chrono::milliseconds(10));
-                      continue;
-                    }
-                  else {
-                    perror("send failed");
-                    close(i);
-                    break;
-                  }
-                  } 
-                  total_sent += sent;
-                }
-            if(total_sent == bytes_read){
-              std::cout << "Sent " << total_sent << " bytes to client." << std::endl;
-            } });
+          handleIncomingMessages(state.client_buffer, i, state.last_active, buffer, bytes_read, pool);
         }
         if (bytes_read == 0)
         {
           {
-            last_active.erase(i);
-            if (max_fd == i)
+            state.last_active.erase(i);
+            if (state.max_fd == i)
             {
-              for (int i = 0; i <= max_fd; i++)
+              for (int i = 0; i <= state.max_fd; i++)
               {
-                if (i > max_fd)
+                if (i > state.max_fd)
                 {
-                  max_fd = i;
+                  state.max_fd = i;
                 }
               }
             }
             std::cout << "Client on socket disconnected." << std::endl;
+            state.client_buffer[i].clear();
             close(i);
-            FD_CLR(i, &master_fds);
-            active_clients--;
+            FD_CLR(i, &state.master_fds);
+            state.active_clients--;
           }
         }
         if (bytes_read < 0)
         {
           if (errno != EAGAIN || errno != EWOULDBLOCK)
           {
-            last_active.erase(i);
+            state.last_active.erase(i);
             perror("recv failed");
             std::cerr << "Error on recv" << std::endl;
             close(i);
-            FD_CLR(i, &master_fds);
-            active_clients--;
+            FD_CLR(i, &state.master_fds);
+            state.active_clients--;
           }
         }
       }

@@ -74,12 +74,13 @@ cmake ..
 // When changes to cpp file
 make
 
+// Starting the server
 ./robust
 ```
 <h3 id="built-with">Built With</h3>
 
 - C++
-- POSIX sockets
+- Linux - sockets
 - select()
 - Thread pool (std::thread, std::mutex, std::condition_variable)
 
@@ -107,6 +108,8 @@ make
     You can test the server using <code>nc 127.0.0.1 8080</code> from multiple terminals. Type messages and observe them being echoed back.
 </p>
 <p>
-    You can also test the server using my script: <code> ./s_script.sh <code>.
-    It will connect 10 clients and send e.g: "Test 1"
+    You can also test the server using my script: <code> ./s_script.sh</code> It will connect 10 clients and a test msg and their current number in the loop, e.g: "Test 1"
 </p>
+
+More information about the "project" can be found inside the info folder in the file "Assignment 2.pdf"
+[more information](./info/).
